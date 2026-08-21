@@ -17,6 +17,12 @@ export interface Envelope {
   iterations: number
   iv: string
   data: string
+  /** Version 2 envelopes wrap a random vault key with both password and recovery keys. */
+  keyIv?: string
+  keyData?: string
+  recoverySalt?: string
+  recoveryIv?: string
+  recoveryKeyData?: string
 }
 
 export function toBase64(bytes: Uint8Array): string {
@@ -51,10 +57,39 @@ export async function deriveKey(
   )
 }
 
+export function newRecoveryKey(): string {
+  return Array.from(randomBytes(20), (byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()
+    .match(/.{1,5}/g)!
+    .join('-')
+}
+
+export async function newVaultKey(): Promise<CryptoKey> {
+  return crypto.subtle.importKey('raw', randomBytes(32), { name: 'AES-GCM' }, true, ['encrypt', 'decrypt'])
+}
+
+export async function wrapVaultKey(wrapper: CryptoKey, vaultKey: CryptoKey): Promise<{ iv: string; data: string }> {
+  const raw = await crypto.subtle.exportKey('raw', vaultKey)
+  const iv = randomBytes(12)
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource }, wrapper, raw)
+  return { iv: toBase64(iv), data: toBase64(new Uint8Array(encrypted)) }
+}
+
+export async function unwrapVaultKey(wrapper: CryptoKey, iv: string, data: string): Promise<CryptoKey> {
+  const raw = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: fromBase64(iv) as BufferSource },
+    wrapper,
+    fromBase64(data) as BufferSource,
+  )
+  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+}
+
 export async function seal(
   key: CryptoKey,
   meta: { username: string; salt: string; iterations: number },
   payload: unknown,
+  keyWrap?: Pick<Envelope, 'keyIv' | 'keyData' | 'recoverySalt' | 'recoveryIv' | 'recoveryKeyData'>,
 ): Promise<Envelope> {
   const iv = randomBytes(12)
   const cipher = await crypto.subtle.encrypt(
@@ -69,6 +104,7 @@ export async function seal(
     iterations: meta.iterations,
     iv: toBase64(iv),
     data: toBase64(new Uint8Array(cipher)),
+    ...keyWrap,
   }
 }
 

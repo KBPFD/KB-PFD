@@ -6,6 +6,7 @@ export function Login() {
   const profile = useStore((s) => s.profile)
   const driveConnected = useStore((s) => s.driveConnected)
   const unlock = useStore((s) => s.unlock)
+  const unlockWithRecoveryKey = useStore((s) => s.unlockWithRecoveryKey)
   const createAccount = useStore((s) => s.createAccount)
   const connectDrive = useStore((s) => s.connectDrive)
   const error = useStore((s) => s.error)
@@ -15,6 +16,8 @@ export function Login() {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
+  const [useRecoveryKey, setUseRecoveryKey] = useState(false)
+  const [newRecoveryKey, setNewRecoveryKey] = useState<string | null>(null)
 
   const isNew = !profile
 
@@ -27,7 +30,10 @@ export function Login() {
       if (password !== confirm) return setError('The two passwords do not match.')
     }
     setBusy(true)
-    if (isNew) await createAccount(username, password)
+    if (isNew) {
+      const recoveryKey = await createAccount(username, password)
+      if (recoveryKey) setNewRecoveryKey(recoveryKey)
+    } else if (useRecoveryKey) await unlockWithRecoveryKey(username, password)
     else await unlock(username, password)
     setBusy(false)
     setPassword('')
@@ -38,6 +44,19 @@ export function Login() {
     setBusy(true)
     await connectDrive()
     setBusy(false)
+  }
+
+  if (newRecoveryKey) {
+    return (
+      <div className="flex min-h-full items-center justify-center bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 p-4">
+        <div className="card w-full max-w-md space-y-4">
+          <h1 className="text-lg font-semibold">Save your recovery key</h1>
+          <p className="text-sm text-slate-400">It can unlock your vault if you forget the password. It will not be shown again.</p>
+          <code className="block break-all rounded-lg bg-slate-950 p-3 text-center text-sm text-emerald-300">{newRecoveryKey}</code>
+          <button className="btn-primary w-full" onClick={() => setNewRecoveryKey(null)}>I saved it</button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -71,13 +90,13 @@ export function Login() {
           </label>
 
           <label className="block">
-            <span className="label">Password</span>
+            <span className="label">{useRecoveryKey ? 'Recovery key' : 'Password'}</span>
             <input
-              type="password"
+              type={useRecoveryKey ? 'text' : 'password'}
               className="field"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              autoComplete={isNew ? 'new-password' : 'current-password'}
+              autoComplete={useRecoveryKey ? 'off' : isNew ? 'new-password' : 'current-password'}
               required
             />
           </label>
@@ -97,8 +116,14 @@ export function Login() {
           )}
 
           <button className="btn-primary w-full" disabled={busy || !username || !password}>
-            {busy ? 'Please wait…' : isNew ? 'Create account' : 'Sign in'}
+            {busy ? 'Please wait…' : isNew ? 'Create account' : useRecoveryKey ? 'Unlock with recovery key' : 'Sign in'}
           </button>
+
+          {!isNew && (
+            <button type="button" className="btn-ghost w-full text-xs" onClick={() => { setUseRecoveryKey(!useRecoveryKey); setPassword('') }}>
+              {useRecoveryKey ? 'Use password instead' : 'Use recovery key instead'}
+            </button>
+          )}
 
           {error && (
             <p className="rounded-xl border border-rose-900/60 bg-rose-950/40 p-3 text-xs text-rose-300">

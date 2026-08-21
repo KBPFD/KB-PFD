@@ -21,8 +21,12 @@ import {
   fromBase64,
   isEnvelope,
   newSalt,
+  newRecoveryKey,
+  newVaultKey,
   seal,
   unseal,
+  unwrapVaultKey,
+  wrapVaultKey,
   KDF_ITERATIONS,
   type Envelope,
 } from '../lib/crypto'
@@ -53,8 +57,9 @@ interface Store {
 
   init: () => Promise<void>
   connectDrive: () => Promise<void>
-  createAccount: (username: string, password: string) => Promise<boolean>
+  createAccount: (username: string, password: string) => Promise<string | null>
   unlock: (username: string, password: string) => Promise<boolean>
+  unlockWithRecoveryKey: (username: string, recoveryKey: string) => Promise<boolean>
   changePassword: (currentPassword: string, nextPassword: string) => Promise<boolean>
   lock: () => void
   signOut: () => void
@@ -106,6 +111,7 @@ let vaultKey: CryptoKey | null = null
 let cachedEnvelope: Envelope | null = readCachedEnvelope()
 /** Plain data pulled from a pre-encryption file, adopted on first unlock. */
 let legacyData: AppData | null = null
+let keyWrap: Pick<Envelope, 'keyIv' | 'keyData' | 'recoverySalt' | 'recoveryIv' | 'recoveryKeyData'> | undefined
 
 function readCachedEnvelope(): Envelope | null {
   try {
@@ -153,7 +159,7 @@ export const useStore = create<Store>((set, get) => {
   const sealCurrent = async (): Promise<Envelope | null> => {
     const profile = get().profile
     if (!vaultKey || !profile) return null
-    const envelope = await seal(vaultKey, profile, get().data)
+    const envelope = await seal(vaultKey, profile, get().data, keyWrap)
     cachedEnvelope = envelope
     writeCachedEnvelope(envelope)
     return envelope
@@ -161,9 +167,11 @@ export const useStore = create<Store>((set, get) => {
 
   const openEnvelope = async (envelope: Envelope, password: string): Promise<AppData | null> => {
     try {
-      const key = await deriveKey(password, fromBase64(envelope.salt), envelope.iterations)
+      const wrapper = await deriveKey(password, fromBase64(envelope.salt), envelope.iterations)
+      const key = envelope.keyIv && envelope.keyData ? await unwrapVaultKey(wrapper, envelope.keyIv, envelope.keyData) : wrapper
       const payload = await unseal<AppData>(key, envelope)
       vaultKey = key
+      keyWrap = envelope.keyIv ? envelope : undefined
       return normalizeData(payload)
     } catch {
       return null
@@ -210,14 +218,27 @@ export const useStore = create<Store>((set, get) => {
       const name = username.trim()
       if (!name) {
         set({ error: 'Choose a username.' })
-        return false
+        return null
       }
       if (get().profile) {
         set({ error: 'An account already exists. Sign in with its password instead.' })
-        return false
+        return null
       }
       const profile: Profile = { username: name, salt: newSalt(), iterations: KDF_ITERATIONS }
-      vaultKey = await deriveKey(password, fromBase64(profile.salt), profile.iterations)
+      const passwordKey = await deriveKey(password, fromBase64(profile.salt), profile.iterations)
+      const recoveryKey = newRecoveryKey()
+      const recoverySalt = newSalt()
+      const recoveryWrapper = await deriveKey(recoveryKey.replace(/-/g, ''), fromBase64(recoverySalt), KDF_ITERATIONS)
+      vaultKey = await newVaultKey()
+      const passwordWrap = await wrapVaultKey(passwordKey, vaultKey)
+      const recoveryWrap = await wrapVaultKey(recoveryWrapper, vaultKey)
+      keyWrap = {
+        keyIv: passwordWrap.iv,
+        keyData: passwordWrap.data,
+        recoverySalt,
+        recoveryIv: recoveryWrap.iv,
+        recoveryKeyData: recoveryWrap.data,
+      }
       set({
         profile,
         unlocked: true,
@@ -227,7 +248,7 @@ export const useStore = create<Store>((set, get) => {
         dirty: true,
       })
       await get().push()
-      return true
+      return recoveryKey
     },
 
     async unlock(username, password) {
@@ -251,6 +272,31 @@ export const useStore = create<Store>((set, get) => {
       return true
     },
 
+    async unlockWithRecoveryKey(username, recoveryKey) {
+      const profile = get().profile
+      const envelope = cachedEnvelope
+      if (!profile || !envelope?.recoverySalt || !envelope.recoveryIv || !envelope.recoveryKeyData) {
+        set({ error: 'This vault does not have a recovery key. Sign in with your password.' })
+        return false
+      }
+      if (username.trim().toLowerCase() !== profile.username.toLowerCase()) {
+        set({ error: 'Incorrect username or recovery key.' })
+        return false
+      }
+      try {
+        const wrapper = await deriveKey(recoveryKey.replace(/\s|-/g, ''), fromBase64(envelope.recoverySalt), KDF_ITERATIONS)
+        const key = await unwrapVaultKey(wrapper, envelope.recoveryIv, envelope.recoveryKeyData)
+        const data = await unseal<AppData>(key, envelope)
+        vaultKey = key
+        keyWrap = envelope
+        set({ data: normalizeData(data), unlocked: true, error: null, dirty: false })
+        return true
+      } catch {
+        set({ error: 'Incorrect username or recovery key.' })
+        return false
+      }
+    },
+
     async changePassword(currentPassword, nextPassword) {
       const profile = get().profile
       if (!profile || !cachedEnvelope) return false
@@ -260,7 +306,10 @@ export const useStore = create<Store>((set, get) => {
         return false
       }
       const nextProfile: Profile = { ...profile, salt: newSalt(), iterations: KDF_ITERATIONS }
-      vaultKey = await deriveKey(nextPassword, fromBase64(nextProfile.salt), nextProfile.iterations)
+      if (!vaultKey) return false
+      const nextPasswordKey = await deriveKey(nextPassword, fromBase64(nextProfile.salt), nextProfile.iterations)
+      const nextPasswordWrap = await wrapVaultKey(nextPasswordKey, vaultKey)
+      keyWrap = { ...keyWrap, keyIv: nextPasswordWrap.iv, keyData: nextPasswordWrap.data }
       set({ profile: nextProfile, error: null })
       await get().push()
       return true
@@ -277,6 +326,7 @@ export const useStore = create<Store>((set, get) => {
       writeCachedEnvelope(null)
       vaultKey = null
       cachedEnvelope = null
+      keyWrap = undefined
       legacyData = null
       set({
         driveConnected: false,
