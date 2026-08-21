@@ -141,7 +141,7 @@ export function Loans() {
           {data.loans.map((l) => {
             const paid = l.principal > 0 ? ((l.principal - l.outstanding) / l.principal) * 100 : 0
             const isAmortized = l.loanType !== 'gold' || l.repaymentMode === 'emi' || !l.repaymentMode
-            const remaining = isAmortized ? loanMonthsRemaining(l.outstanding, l.interestRate, l.emi) : null
+            const remaining = isAmortized ? loanMonthsRemaining(l.outstanding, l.interestRate, l.emi) : 0
             return (
               <Card key={l.id}>
                 <div className="flex items-start justify-between gap-2">
