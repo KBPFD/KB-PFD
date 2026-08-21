@@ -157,14 +157,19 @@ export function buildReport(data: AppData, range: ReportRange): jsPDF {
 
   if (data.loans.length) {
     autoTable(doc, {
-      head: [['Loan', 'Lender', 'Outstanding', 'EMI', 'Rate']],
-      body: data.loans.map((l) => [
-        l.name,
-        l.lender || '-',
-        money(l.outstanding, cur),
-        money(l.emi, cur),
-        `${l.interestRate}%`,
-      ]),
+      head: [['Loan', 'Lender', 'Outstanding', 'Payment', 'Repayment', 'Rate']],
+      body: data.loans.map((l) => {
+        const interestOnly = l.loanType === 'gold' && l.repaymentMode === 'interest_only'
+        const bullet = l.loanType === 'gold' && l.repaymentMode === 'bullet'
+        return [
+          l.name,
+          l.lender || '-',
+          money(l.outstanding, cur),
+          money(interestOnly ? (l.outstanding * l.interestRate) / 1200 : bullet ? 0 : l.emi, cur),
+          interestOnly ? 'Monthly interest' : bullet ? 'Bullet at maturity' : 'EMI',
+          `${l.interestRate}%`,
+        ]
+      }),
       theme: 'striped',
       headStyles: { fillColor: [27, 110, 245] },
       styles: { fontSize: 9, cellPadding: 5 },

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store/useStore'
 import { Card, ConfirmButton, EmptyState, Field, Modal, Stat } from '../components/ui'
-import type { Loan } from '../types'
+import type { GoldLoanRepaymentMode, Loan, LoanType } from '../types'
 import { emiFor, loanMonthsRemaining, totalLoanOutstanding } from '../lib/calc'
 import { formatDate, formatMoney, today } from '../lib/format'
 
@@ -9,6 +9,8 @@ interface FormState {
   id?: string
   name: string
   lender: string
+  loanType: LoanType
+  repaymentMode: GoldLoanRepaymentMode
   principal: string
   outstanding: string
   interestRate: string
@@ -21,6 +23,8 @@ function blankForm(): FormState {
   return {
     name: '',
     lender: '',
+    loanType: 'standard',
+    repaymentMode: 'emi',
     principal: '',
     outstanding: '',
     interestRate: '',
@@ -28,6 +32,18 @@ function blankForm(): FormState {
     startDate: today(),
     tenureMonths: '',
   }
+}
+
+function monthlyPayment(loan: Loan): number {
+  if (loan.loanType !== 'gold' || loan.repaymentMode === 'emi' || !loan.repaymentMode) return loan.emi
+  if (loan.repaymentMode === 'interest_only') return (loan.outstanding * loan.interestRate) / 1200
+  return 0
+}
+
+function paymentLabel(loan: Loan): string {
+  if (loan.loanType !== 'gold' || loan.repaymentMode === 'emi' || !loan.repaymentMode) return 'EMI'
+  if (loan.repaymentMode === 'interest_only') return 'Monthly interest'
+  return 'Monthly payment'
 }
 
 export function Loans() {
@@ -40,7 +56,7 @@ export function Loans() {
   const [form, setForm] = useState<FormState>(blankForm())
   const cur = data.currency
 
-  const totalEmi = data.loans.reduce((s, l) => s + l.emi, 0)
+  const totalMonthlyPayment = data.loans.reduce((sum, loan) => sum + monthlyPayment(loan), 0)
   const outstanding = totalLoanOutstanding(data)
   const totalPrincipal = data.loans.reduce((s, l) => s + l.principal, 0)
 
@@ -54,6 +70,8 @@ export function Loans() {
       id: l.id,
       name: l.name,
       lender: l.lender ?? '',
+      loanType: l.loanType ?? 'standard',
+      repaymentMode: l.repaymentMode ?? 'emi',
       principal: String(l.principal),
       outstanding: String(l.outstanding),
       interestRate: String(l.interestRate),
@@ -75,6 +93,8 @@ export function Loans() {
     const payload: Omit<Loan, 'id'> = {
       name,
       lender: form.lender.trim() || undefined,
+      loanType: form.loanType,
+      repaymentMode: form.loanType === 'gold' ? form.repaymentMode : 'emi',
       principal: Number(form.principal) || 0,
       outstanding: Number(form.outstanding) || 0,
       interestRate: Number(form.interestRate) || 0,
@@ -98,7 +118,7 @@ export function Loans() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Outstanding" value={formatMoney(outstanding, cur)} tone={outstanding > 0 ? 'bad' : 'default'} />
-        <Stat label="Monthly EMI" value={formatMoney(totalEmi, cur)} />
+        <Stat label="Monthly payments" value={formatMoney(totalMonthlyPayment, cur)} />
         <Stat label="Originally borrowed" value={formatMoney(totalPrincipal, cur)} />
         <Stat
           label="Repaid"
@@ -120,14 +140,15 @@ export function Loans() {
         <div className="grid gap-3 sm:grid-cols-2">
           {data.loans.map((l) => {
             const paid = l.principal > 0 ? ((l.principal - l.outstanding) / l.principal) * 100 : 0
-            const remaining = loanMonthsRemaining(l.outstanding, l.interestRate, l.emi)
+            const isAmortized = l.loanType !== 'gold' || l.repaymentMode === 'emi' || !l.repaymentMode
+            const remaining = isAmortized ? loanMonthsRemaining(l.outstanding, l.interestRate, l.emi) : null
             return (
               <Card key={l.id}>
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="text-sm font-medium">{l.name}</p>
                     <p className="text-xs text-slate-500">
-                      {l.lender || 'Lender not set'} · {l.interestRate}% p.a. · from {formatDate(l.startDate)}
+                      {l.lender || 'Lender not set'} · {l.interestRate}% p.a. · {l.loanType === 'gold' ? 'Gold loan' : 'Loan'} · from {formatDate(l.startDate)}
                     </p>
                   </div>
                   <div className="flex gap-1">
@@ -144,8 +165,8 @@ export function Loans() {
                     <p className="font-semibold text-rose-400">{formatMoney(l.outstanding, cur)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-slate-500">EMI</p>
-                    <p className="font-semibold">{formatMoney(l.emi, cur)}</p>
+                    <p className="text-xs text-slate-500">{paymentLabel(l)}</p>
+                    <p className="font-semibold">{formatMoney(monthlyPayment(l), cur)}</p>
                   </div>
                 </div>
 
@@ -157,9 +178,13 @@ export function Loans() {
                 </div>
                 <p className="mt-1 text-xs text-slate-500">
                   {paid.toFixed(1)}% repaid ·{' '}
-                  {Number.isFinite(remaining)
-                    ? `${remaining} EMIs left (~${(remaining / 12).toFixed(1)} yrs)`
-                    : 'EMI does not cover the interest'}
+                  {isAmortized
+                    ? Number.isFinite(remaining)
+                      ? `${remaining} EMIs left (~${(remaining / 12).toFixed(1)} yrs)`
+                      : 'EMI does not cover the interest'
+                    : l.repaymentMode === 'interest_only'
+                      ? 'Interest paid monthly · principal due at maturity'
+                      : 'Bullet repayment · principal and interest due at maturity'}
                 </p>
               </Card>
             )
@@ -200,6 +225,35 @@ export function Loans() {
               onChange={(e) => setForm({ ...form, lender: e.target.value })}
             />
           </Field>
+          <Field label="Loan type">
+            <select
+              className="field"
+              value={form.loanType}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  loanType: e.target.value as LoanType,
+                  repaymentMode: e.target.value === 'gold' ? form.repaymentMode : 'emi',
+                })
+              }
+            >
+              <option value="standard">Standard loan</option>
+              <option value="gold">Gold loan</option>
+            </select>
+          </Field>
+          {form.loanType === 'gold' && (
+            <Field label="Gold loan repayment">
+              <select
+                className="field"
+                value={form.repaymentMode}
+                onChange={(e) => setForm({ ...form, repaymentMode: e.target.value as GoldLoanRepaymentMode })}
+              >
+                <option value="emi">Reducing-balance EMI</option>
+                <option value="interest_only">Monthly interest, principal at maturity</option>
+                <option value="bullet">Bullet payment at maturity</option>
+              </select>
+            </Field>
+          )}
           <Field label={`Principal (${cur})`}>
             <input
               type="number"
@@ -237,15 +291,17 @@ export function Loans() {
               onChange={(e) => setForm({ ...form, tenureMonths: e.target.value })}
             />
           </Field>
-          <Field label={`EMI (${cur})`}>
-            <input
-              type="number"
-              inputMode="decimal"
-              className="field"
-              value={form.emi}
-              onChange={(e) => setForm({ ...form, emi: e.target.value })}
-            />
-          </Field>
+          {form.loanType !== 'gold' || form.repaymentMode === 'emi' ? (
+            <Field label={`EMI (${cur})`}>
+              <input
+                type="number"
+                inputMode="decimal"
+                className="field"
+                value={form.emi}
+                onChange={(e) => setForm({ ...form, emi: e.target.value })}
+              />
+            </Field>
+          ) : null}
           <Field label="Start date">
             <input
               type="date"
@@ -254,9 +310,11 @@ export function Loans() {
               onChange={(e) => setForm({ ...form, startDate: e.target.value })}
             />
           </Field>
-          <button className="btn-ghost sm:col-span-2" onClick={suggestEmi}>
-            Calculate EMI from principal, rate & tenure
-          </button>
+          {(!form.loanType || form.repaymentMode === 'emi') && (
+            <button className="btn-ghost sm:col-span-2" onClick={suggestEmi}>
+              Calculate EMI from principal, rate & tenure
+            </button>
+          )}
         </div>
       </Modal>
     </div>

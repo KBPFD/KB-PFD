@@ -50,10 +50,17 @@ export interface Investment {
   note?: string
 }
 
+export type LoanType = 'standard' | 'gold'
+
+export type GoldLoanRepaymentMode = 'emi' | 'interest_only' | 'bullet'
+
 export interface Loan {
   id: string
   name: string
   lender?: string
+  /** Gold loans can use interest-only or bullet repayment instead of a standard EMI. */
+  loanType?: LoanType
+  repaymentMode?: GoldLoanRepaymentMode
   principal: number
   outstanding: number
   /** annual rate in % */
