@@ -35,7 +35,7 @@ declare global {
 }
 
 export function getClientId(): string {
-  return (localStorage.getItem(CLIENT_ID_KEY) || (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || '').trim()
+  return ((import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || localStorage.getItem(CLIENT_ID_KEY) || '').trim()
 }
 
 export function setClientId(id: string) {
