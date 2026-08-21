@@ -66,7 +66,7 @@ export function newRecoveryKey(): string {
 }
 
 export async function newVaultKey(): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', randomBytes(32), { name: 'AES-GCM' }, true, ['encrypt', 'decrypt'])
+  return crypto.subtle.importKey('raw', randomBytes(32) as BufferSource, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt'])
 }
 
 export async function wrapVaultKey(wrapper: CryptoKey, vaultKey: CryptoKey): Promise<{ iv: string; data: string }> {
